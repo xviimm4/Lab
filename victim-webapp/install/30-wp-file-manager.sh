@@ -31,6 +31,24 @@ mkdir -p "$PLUGDIR"
 rm -rf "$DEST"
 unzip -q "$ZIP" -d "$PLUGDIR"
 
+# Một số bản phân phối (vd 6.0) là ZIP-LỒNG: zip ngoài bung ra lại chứa một zip nữa
+# (wp-file-manager-*.zip) thay vì file PHP. Nếu sau khi unzip mà chưa thấy connector,
+# dò zip lồng bên trong $DEST và bung tiếp vào $PLUGDIR, rồi xoá zip lồng đi.
+if [ ! -f "$DEST/lib/php/connector.minimal.php" ]; then
+  INNER="$(find "$DEST" -maxdepth 2 -iname '*.zip' | head -n1)"
+  if [ -n "$INNER" ]; then
+    echo "[*] Phát hiện zip lồng: $(basename "$INNER") → bung tiếp…"
+    unzip -oq "$INNER" -d "$PLUGDIR"
+    rm -f "$INNER"
+  fi
+fi
+# Chốt: connector phải tồn tại, nếu không thì dừng để khỏi tưởng nhầm là đã cài xong.
+[ -f "$DEST/lib/php/connector.minimal.php" ] || {
+  echo "[!] Không thấy lib/php/connector.minimal.php sau khi giải nén — plugin chưa đúng."
+  echo "    Kiểm tra zip tải về: $ZIP"
+  exit 1
+}
+
 # Thư mục files/ là nơi elFinder ghi upload — chokepoint của V1.
 mkdir -p "$DEST/lib/files"
 chown -R www-data:www-data "$DEST"

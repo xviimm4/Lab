@@ -16,6 +16,7 @@ systemctl disable httpd-lab 2>/dev/null || true
 rm -f /etc/systemd/system/httpd-lab.service
 systemctl daemon-reload 2>/dev/null || true
 rm -rf "$HTTPD_PREFIX"
+rm -f /etc/ld.so.conf.d/httpd-lab.conf && ldconfig 2>/dev/null || true
 
 # WordPress + payload V1.
 rm -rf "$WP_DOCROOT"

@@ -19,10 +19,23 @@ else
 fi
 
 echo "[2] mod_php (parent của webshell = apache2, không fpm)"
-if apachectl -M 2>/dev/null | grep -qi 'php._module'; then
-  pass "php_module đã load (mod_php)"
+# Điều quyết định ancestry là: PHP chạy IN-PROCESS trong apache2 (mod_php), KHÔNG qua php-fpm.
+# Lưu ý: 'apache2ctl -M | grep php_module' không đáng tin — một số bản (php8.5 trên Ubuntu mới)
+# mod_php load nhưng không in ra dòng 'php_module', gây false-negative. Dò qua nhiều nguồn.
+PHP_VIA_FPM=0
+apache2ctl -M 2>/dev/null | grep -qi 'proxy_fcgi_module' && PHP_VIA_FPM=1
+systemctl is-active --quiet 'php*-fpm.service' 2>/dev/null && PHP_VIA_FPM=1
+MODPHP=0
+if command -v a2query >/dev/null 2>&1 && a2query -m 2>/dev/null | grep -qiE '^php'; then MODPHP=1
+elif ls /etc/apache2/mods-enabled/ 2>/dev/null | grep -qiE '^php.*\.load'; then MODPHP=1
+elif apache2ctl -M 2>/dev/null | grep -qi 'php._module'; then MODPHP=1
+fi
+if [ "$MODPHP" -eq 1 ] && [ "$PHP_VIA_FPM" -eq 0 ]; then
+  pass "mod_php đã load, không dùng php-fpm (ancestry apache2→sh giữ nguyên)"
+elif [ "$MODPHP" -eq 1 ] && [ "$PHP_VIA_FPM" -eq 1 ]; then
+  fail "mod_php có nhưng php-fpm cũng active — ancestry có thể lệch (parent = php-fpm)"
 else
-  fail "Không thấy php_module — process ancestry có thể lệch"
+  fail "Không thấy mod_php — kiểm libapache2-mod-php + a2enmod"
 fi
 
 echo "[3] V1 plugin WP File Manager ${WPFM_VERSION} (${WPFM_CVE})"
