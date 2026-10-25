@@ -62,8 +62,12 @@ echo "[*] configure + make (có thể vài phút)…"
 make -j"$(nproc)" >/dev/null
 make install >/dev/null
 
-# Cho runtime linker thấy libpcre.so trong prefix (tránh lỗi "cannot open shared object" khi start).
-echo "$HTTPD_PREFIX/lib" > /etc/ld.so.conf.d/httpd-lab.conf
+# KHÔNG ghi $HTTPD_PREFIX/lib vào /etc/ld.so.conf.d (ld path TOÀN HỆ THỐNG): thư mục này
+# chứa libapr/libaprutil tự build (không có crypto) sẽ che libaprutil của distro → apache2
+# hệ thống crash "undefined symbol: apr_crypto_init". Thay vào đó, chỉ cấp LD_LIBRARY_PATH
+# RIÊNG cho service httpd-lab (xem Environment= trong unit bên dưới) để nó tự thấy libpcre/libapr.
+# Dọn tàn dư của bản cài cũ (nếu có) để không còn che lib hệ thống.
+rm -f /etc/ld.so.conf.d/httpd-lab.conf
 ldconfig
 
 CONF="$HTTPD_PREFIX/conf/httpd.conf"
@@ -106,6 +110,8 @@ Description=LAB Apache httpd ${HTTPD_VERSION} (${HTTPD_CVE}) — host-only only
 After=network.target
 [Service]
 Type=forking
+# Chỉ httpd-lab thấy lib tự build (libpcre/libapr trong prefix) — KHÔNG đụng ld path hệ thống.
+Environment=LD_LIBRARY_PATH=${HTTPD_PREFIX}/lib
 ExecStart=${HTTPD_PREFIX}/bin/apachectl start
 ExecStop=${HTTPD_PREFIX}/bin/apachectl stop
 ExecReload=${HTTPD_PREFIX}/bin/apachectl graceful

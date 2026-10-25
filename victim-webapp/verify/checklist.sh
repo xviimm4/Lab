@@ -12,10 +12,16 @@ info(){ printf '  \033[33m[ .. ]\033[0m %s\n' "$*"; }
 echo "=== verify victim-webapp ==="
 
 echo "[1] WordPress chạy + truy cập được"
-if curl -fsS "http://localhost${WP_URL_PATH}/" -o /dev/null; then
-  pass "GET ${WP_URL_PATH}/ OK"
+# Không dùng -f (nó nuốt mất lý do): bắt mã HTTP + curl exit code để chỉ rõ nguyên nhân.
+# -L theo redirect để thấy mã cuối cùng (vd siteurl trỏ IP khác → 301).
+WP_HTTP="$(curl -sS -L -o /dev/null -w '%{http_code}' "http://localhost${WP_URL_PATH}/" 2>/dev/null)"
+CURL_RC=$?
+if [ "$CURL_RC" -ne 0 ] || [ "$WP_HTTP" = "000" ]; then
+  fail "Không KẾT NỐI được http://localhost${WP_URL_PATH}/ (curl rc=$CURL_RC) — apache2 chạy chưa? (systemctl status apache2)"
+elif [ "$WP_HTTP" -ge 200 ] && [ "$WP_HTTP" -lt 400 ]; then
+  pass "GET ${WP_URL_PATH}/ OK (HTTP $WP_HTTP)"
 else
-  fail "Không GET được ${WP_URL_PATH}/ (đã cài WP + hoàn tất install.php?)"
+  fail "GET ${WP_URL_PATH}/ → HTTP $WP_HTTP  (500=lỗi DB/wp-config; 404=sai path/WP_URL_PATH; 403=quyền)"
 fi
 
 echo "[2] mod_php (parent của webshell = apache2, không fpm)"
